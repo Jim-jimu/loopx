@@ -315,6 +315,124 @@ def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
     return payload
 
 
+_RUNTIME_IDENTITY_TEXT_FIELDS = (
+    "node_version",
+    "sqlite_version",
+    "sqlite_source_id",
+    "unavailable_reason",
+)
+
+
+def runtime_identity_from_info(info: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Project the serving runtime's Node/SQLite identity from a runtime info file.
+
+    The managed runtime is reused per source revision, so this identity can
+    differ from the Node on the caller's PATH; status surfaces must show which
+    runtime is actually serving before a qualification failure is diagnosed.
+    """
+
+    if not isinstance(info, Mapping):
+        return None
+    value = info.get("runtime_identity")
+    if not isinstance(value, Mapping):
+        return None
+    identity: dict[str, Any] = {
+        "schema_version": value.get("schema_version"),
+        "sqlite_available": value.get("sqlite_available") is True,
+        "sqlite_authority_qualified": value.get("sqlite_authority_qualified")
+        is True,
+        "synchronous_statement_finalization": (
+            value.get("synchronous_statement_finalization")
+            if isinstance(value.get("synchronous_statement_finalization"), bool)
+            else None
+        ),
+    }
+    for field in _RUNTIME_IDENTITY_TEXT_FIELDS:
+        raw = value.get(field)
+        identity[field] = raw if isinstance(raw, str) else None
+    return identity
+
+
+EFFECT_RUNTIME_RESTART_SCHEMA_VERSION = "loopx_effect_runtime_restart_v0"
+
+
+def _serving_token(path: Path) -> tuple[bool, str | None]:
+    """Report whether a runtime is still publishing itself at ``path``.
+
+    The managed runtime removes its info file as part of its shutdown
+    handshake, so the file is the authoritative stop signal. The pid is not:
+    an exited runtime whose parent has not reaped it still answers a liveness
+    probe, which would otherwise report a completed restart as pending.
+    """
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False, None
+    except (json.JSONDecodeError, OSError):
+        # An unreadable file is not evidence of a stopped runtime; keep waiting
+        # until the deadline instead of claiming a restart that did not happen.
+        return True, None
+    if not isinstance(payload, dict):
+        return False, None
+    token = payload.get("token")
+    return True, token if isinstance(token, str) else None
+
+
+def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
+    """Stop the managed runtime serving this source revision.
+
+    The replacement runtime resolves Node from the PATH of the next request, so
+    this is the operator action after installing a qualified Node: a runtime
+    started earlier keeps its own Node until it exits.
+    """
+
+    fingerprint = _runtime_fingerprint()
+    info_path = _runtime_info_path(fingerprint)
+    info = _read_info(info_path, fingerprint=fingerprint)
+    identity = runtime_identity_from_info(info)
+    if info is None:
+        return {
+            "schema_version": EFFECT_RUNTIME_RESTART_SCHEMA_VERSION,
+            "status": "not_running",
+            "stopped": False,
+            "previous_runtime_identity": identity,
+            "info_path": str(info_path),
+        }
+    pid = info.get("pid")
+    serving_token = info.get("token")
+    try:
+        _request_with_info(
+            info,
+            request_id=uuid.uuid4().hex,
+            method="runtime.shutdown",
+            params={},
+            timeout=timeout,
+        )
+    except (EffectRuntimeRejected, EffectRuntimeRemoteError, OSError):
+        # A runtime that is already closing must still be reported as pending
+        # rather than as a failed restart.
+        pass
+    deadline = time.monotonic() + timeout
+    stopped = False
+    while time.monotonic() < deadline:
+        published, published_token = _serving_token(info_path)
+        if not published or published_token != serving_token:
+            stopped = True
+            break
+        if not _pid_is_alive(pid):
+            stopped = True
+            break
+        time.sleep(0.05)
+    return {
+        "schema_version": EFFECT_RUNTIME_RESTART_SCHEMA_VERSION,
+        "status": "stopped" if stopped else "shutdown_pending",
+        "stopped": stopped,
+        "previous_runtime_identity": identity,
+        "info_path": str(info_path),
+    }
+
+
 def _request_with_info(
     info: Mapping[str, Any],
     *,
@@ -630,6 +748,31 @@ def effect_runtime_result(
     ).get("result")
 
 
+def _serving_runtime_identity() -> dict[str, Any] | None:
+    """Project the identity of the runtime serving this revision, if any."""
+
+    fingerprint = _runtime_fingerprint()
+    info = _read_info(_runtime_info_path(fingerprint), fingerprint=fingerprint)
+    return runtime_identity_from_info(info)
+
+
+def _sqlite_restart_recommendation(identity: Mapping[str, Any] | None) -> str | None:
+    """Name the repair for a serving runtime that cannot run SQLite authority."""
+
+    if identity is None or identity.get("sqlite_authority_qualified") is True:
+        return None
+    # The File path is ready but the SQLite authority lane is not: the serving
+    # runtime keeps its own Node, so installing Node alone would not repair it.
+    return (
+        "The managed Effect runtime serving this revision runs Node "
+        f"{identity.get('node_version')} with SQLite "
+        f"{identity.get('sqlite_version')}, which lacks the WAL-reset fix. "
+        "Install the qualified Node 22.22.3 runtime and run "
+        "`loopx doctor --restart-runtime` so the next request starts a new "
+        "runtime; the SQLite authority lane stays unavailable until then."
+    )
+
+
 def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]:
     """Report whether the managed TS Effect runtime can serve control-plane work."""
 
@@ -637,18 +780,16 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
     ready = status == "ready"
     runtime_state = "unavailable"
     runtime_diagnostic_code: str | None = None
+    runtime_identity: dict[str, Any] | None = None
     if ready:
         try:
             fingerprint = _runtime_fingerprint()
-            runtime_state = (
-                "running"
-                if _read_info(
-                    _runtime_info_path(fingerprint),
-                    fingerprint=fingerprint,
-                )
-                is not None
-                else "stopped"
+            info = _read_info(
+                _runtime_info_path(fingerprint),
+                fingerprint=fingerprint,
             )
+            runtime_state = "running" if info is not None else "stopped"
+            runtime_identity = runtime_identity_from_info(info)
         except (OSError, EffectRuntimeStartupError) as exc:
             ready = False
             status = "package_invalid"
@@ -674,6 +815,7 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
         "default_cli_blocking": True,
         "minimum_node_version": MINIMUM_NODE_VERSION_TEXT,
         "detected_node_version": version,
+        "runtime_identity": runtime_identity,
         "semantic_probe": "not_requested" if not deep else "not_run",
         "runtime_lifecycle": runtime_lifecycle,
         "recommended_action": (
@@ -687,6 +829,11 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
             )
         ),
     }
+    if ready:
+        result["recommended_action"] = (
+            _sqlite_restart_recommendation(runtime_identity)
+            or result["recommended_action"]
+        )
     if not ready or not deep:
         return result
     try:
@@ -740,12 +887,20 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
                 "`loopx doctor --deep`."
             ),
         }
+    # The probe just started the runtime, so its identity is only readable now;
+    # report the Node/SQLite pair that will serve the following requests.
+    serving_identity = _serving_runtime_identity() or runtime_identity
     return {
         **result,
         "semantic_probe": "passed",
+        "runtime_identity": serving_identity,
         "runtime_lifecycle": {
             **runtime_lifecycle,
             "state": "running",
             "diagnostic_code": None,
         },
+        "recommended_action": (
+            _sqlite_restart_recommendation(serving_identity)
+            or result["recommended_action"]
+        ),
     }

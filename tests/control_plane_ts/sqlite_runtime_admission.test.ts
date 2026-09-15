@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import test from "node:test";
 import {spawnSync} from "node:child_process";
-import {hasSqliteWalResetFix} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
+import {hasSqliteWalResetFix, sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import { SqliteAuthorityStore } from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 
 test("SQLite WAL admission follows the fixed upstream release lines", () => {
@@ -20,9 +20,8 @@ test("SQLite WAL admission follows the fixed upstream release lines", () => {
   }
 });
 
-test("a vulnerable SQLite version is rejected before authority paths are created", async t => {
+async function rejectVulnerableDriver(servingManagedRuntime: boolean): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "sqlite-version-admission-"));
-  t.after(() => rm(root, {recursive: true, force: true}));
   const source = new URL("../../loopx/control_plane/coordination/sqlite_authority_store.ts", import.meta.url).href;
   const script = `
     import assert from 'node:assert/strict';
@@ -38,14 +37,61 @@ test("a vulnerable SQLite version is rejected before authority paths are created
     Module._load=function(id,...args){return id==='node:sqlite'?{...sqlite,DatabaseSync:VulnerableVersion}:original.call(this,id,...args)};
     const {SqliteAuthorityStore}=await import(${JSON.stringify(source)});
     const target=process.argv[1]+'/authority', store=new SqliteAuthorityStore(target,'goal');
+    const reasons=[];
     for(const result of [await store.storeIdentity(),await store.commitAuthority({operation_id:'must-reject',expected_provider_revision:null,next_projection:{},events:[],receipts:[]})]) {
       assert.equal(result.status,'failed');assert.match(result.reason,/SQLite 3\\.51\\.2/);
+      reasons.push(result.reason);
     }
     assert.equal(existsSync(target),false);
+    process.stdout.write(JSON.stringify(reasons));
   `;
   const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
-    "--input-type=module", "-e", script, root], {encoding: "utf8", timeout: 15000});
+    "--input-type=module", "-e", script, root], {
+    encoding: "utf8", timeout: 15000,
+    env: servingManagedRuntime
+      ? {...process.env, LOOPX_EFFECT_RUNTIME_TOKEN: "smoke-runtime-token"}
+      : process.env,
+  });
+  await rm(root, {recursive: true, force: true});
   assert.equal(child.status, 0, child.stderr);
+  const reasons: string[] = JSON.parse(child.stdout);
+  assert.equal(reasons.length, 2);
+  return reasons[0];
+}
+
+test("a vulnerable SQLite version is rejected before authority paths are created", async () => {
+  const reason = await rejectVulnerableDriver(true);
+  // The refusal must name the repair path for a reused managed runtime,
+  // because installing a qualified Node alone does not replace it.
+  assert.match(reason, /managed Effect runtime \(pid \d+/);
+  assert.match(reason, /doctor --restart-runtime/);
+});
+
+test("a direct CLI run is told to rerun on a qualified Node instead", async () => {
+  const reason = await rejectVulnerableDriver(false);
+  assert.match(reason, /Rerun this command on a PATH whose Node is the qualified runtime/);
+  assert.doesNotMatch(reason, /restart-runtime/);
+});
+
+test("runtime identity publishes the serving Node and SQLite pair", () => {
+  const identity = sqliteRuntimeIdentity();
+  assert.equal(identity.schema_version, "loopx_sqlite_runtime_identity_v0");
+  assert.equal(identity.node_version, process.version);
+  assert.equal(typeof identity.sqlite_available, "boolean");
+  assert.equal(typeof identity.sqlite_authority_qualified, "boolean");
+  if (!identity.sqlite_available) {
+    assert.equal(identity.sqlite_version, null);
+    assert.equal(identity.sqlite_authority_qualified, false);
+    assert.equal(typeof identity.unavailable_reason, "string");
+    return;
+  }
+  assert.equal(identity.unavailable_reason, null);
+  assert.equal(
+    identity.sqlite_authority_qualified,
+    hasSqliteWalResetFix(String(identity.sqlite_version)) &&
+      identity.synchronous_statement_finalization === true,
+    `identity ${identity.sqlite_version}/${identity.synchronous_statement_finalization}`,
+  );
 });
 
 test("default File authority never loads the optional SQLite driver", async t => {

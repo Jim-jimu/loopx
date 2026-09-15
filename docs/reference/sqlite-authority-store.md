@@ -115,7 +115,10 @@ statement-only probe, including vulnerable drivers shipped with older Node 22
 releases. The public Node minimum remains 22.18 for the default File path;
 SQLite requires the additional fix. No provider selection changes and no
 fallback to File occur when an explicitly selected SQLite runtime is rejected.
-The optional driver is still loaded only after opt-in.
+The optional driver is still opened only after opt-in. The serving runtime
+loads it in-process once at startup for the read-only identity probe described
+below; that probe opens no database file and creates no authority state, and
+the File path keeps working when the driver is unavailable.
 
 From the repository checkout, preview selection:
 
@@ -136,6 +139,24 @@ The process starting the managed Effect runtime must use the qualified Node
 runtime too. Stop a previously running managed runtime normally before changing
 its Node executable. Adding an experimental flag to an older Node 22 release does not fix its
 statement lifecycle.
+
+The managed Effect runtime is reused per user and source revision, so the
+Node/SQLite pair serving a goal is not necessarily the one the calling process
+resolves from PATH. Its info file records a `runtime_identity`
+(`node_version`, `sqlite_version`, `sqlite_authority_qualified`), and
+`loopx doctor` reports that identity plus a restart recommendation when the
+serving runtime is not qualified. Installing the qualified Node alone does not
+repair a runtime that is already running: restart it with
+
+```sh
+loopx doctor --restart-runtime
+```
+
+so the next control-plane request starts a new runtime from the current PATH.
+Waiting for the runtime's idle shutdown has the same effect.
+A direct CLI invocation that is not the reused runtime reports the same
+qualification failure without a restart step, because rerunning it on the
+qualified PATH is already sufficient there.
 
 After separately admitted canonical initialization, ordinary `loopx todo`
 commands use the persisted selector. For example:
@@ -336,6 +357,20 @@ other formal budget.
 SQLite 资格参考使用 Node 22.22.3／SQLite 3.51.3；打开前同时检查实际 WAL 修复版本
 和 statement 关闭行为。公开 Node 最低版本 22.18 继续用于默认 File 路径。显式
 SQLite 选择遇到不合格 runtime 会拒绝，不会改默认 provider 或静默回退。
+
+托管 Effect runtime 按用户与源码修订复用，因此真正服务某个 Goal 的 Node／SQLite
+不一定等于调用进程从 PATH 解析到的那一份。runtime info 文件记录
+`runtime_identity`（`node_version`、`sqlite_version`、`sqlite_authority_qualified`），
+`loopx doctor` 会报告该身份；当正在服务的 runtime 不合格时，它还给出重启建议。
+只安装合格 Node 不足以修复一个已经在运行的 runtime：用
+
+```sh
+loopx doctor --restart-runtime
+```
+
+结束后，下一次 control-plane 请求会按当前 PATH 启动新 runtime；等待其 idle
+自动退出等效。非复用 runtime 的直接 CLI 调用只报告同一资格失败、不给重启步骤，
+因为直接换成合格 PATH 重跑一次即可。
 
 默认无参数命令从旧的 4 KiB/100k 改为小型 `rehearsal`，只验证工具和不变量；
 正式 64 KiB、10k/100k 对照必须显式选择

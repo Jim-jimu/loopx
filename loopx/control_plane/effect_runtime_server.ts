@@ -12,6 +12,7 @@ import {
   effectRuntimeErrorPayload,
 } from "./effect_runtime_errors.ts";
 import { atomicWriteJson } from "./effect_runtime_io.ts";
+import { sqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
 import {
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
@@ -196,6 +197,9 @@ server.listen(0, "127.0.0.1", async () => {
     host: "127.0.0.1",
     port: address.port,
     token,
+    // A managed runtime is reused per source revision, so the Node/SQLite pair
+    // serving a goal is not necessarily the one the caller resolves from PATH.
+    runtime_identity: sqliteRuntimeIdentity(),
   });
   await chmod(infoPath, 0o600);
   resetIdleTimer(server);

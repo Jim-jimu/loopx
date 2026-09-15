@@ -1300,9 +1300,35 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
                 f"- semantic_probe: `{typescript_control_plane.get('semantic_probe')}`",
             ]
         )
+        runtime_identity = typescript_control_plane.get("runtime_identity")
+        if isinstance(runtime_identity, dict):
+            lines.append(
+                "- runtime_identity: "
+                f"node=`{runtime_identity.get('node_version')}`, "
+                f"sqlite=`{runtime_identity.get('sqlite_version')}`, "
+                "sqlite_authority_qualified="
+                f"`{runtime_identity.get('sqlite_authority_qualified')}`"
+            )
         recommended_action = typescript_control_plane.get("recommended_action")
         if recommended_action:
             lines.append(f"- recommended_action: {recommended_action}")
+    restart = payload.get("effect_runtime_restart")
+    if isinstance(restart, dict):
+        previous = restart.get("previous_runtime_identity")
+        previous_text = (
+            f"Node {previous.get('node_version')} / SQLite "
+            f"{previous.get('sqlite_version')}"
+            if isinstance(previous, dict)
+            else "no runtime was serving"
+        )
+        lines.extend(
+            [
+                "",
+                "## Effect Runtime Restart",
+                f"- status: `{restart.get('status')}`",
+                f"- stopped_runtime: {previous_text}",
+            ]
+        )
     if not payload.get("ok"):
         lines.extend(["", "## Fix", str(payload.get("fix"))])
         writable = payload.get("global_registry_writability")

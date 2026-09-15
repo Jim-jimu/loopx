@@ -81,10 +81,28 @@ in a `manager.context` event, and supplies it to the executor. Chat prose is
 never the inventory. Normal manager questions no longer silently use a limited
 frontend projection; explicitly choosing status-only still uses that projection.
 
-For Codex, manager defaults are `gpt-6-astra` with `high` reasoning. Set
+Manager defaults follow the operator credential (`DEEPSEEK_API_KEY`, or the
+endpoint in `DEEPSEEK_BASE_URL`): with a credential configured the steward
+channel defaults to the operator model (`deepseek-flash`) so its model work does
+not depend on an individual CLI login, and without one it keeps the vendor
+default `gpt-6-astra`. Reasoning effort defaults to `high` either way. The
+steward channel also needs a transport that can hold an interactive session:
+the default executor endpoint resolves from the same credential, and when the
+managed host has no chat transport the resolution reports
+`dsh_chat_transport_unsupported` instead of silently downgrading. Set
 `LOOPX_MANAGER_MODEL` and `LOOPX_MANAGER_REASONING_EFFORT` on the Chat service to
-override them. Thread start, resume and turn start explicitly carry the settings;
-worker configuration is unchanged. Capabilities expose the manager defaults.
+override the defaults; an explicit override always wins. Thread start, resume
+and turn start explicitly carry the settings; worker configuration is unchanged.
+Capabilities expose the manager defaults and their source. A session request that
+names a managed host without a Chat transport fails as the typed
+`managed_host_chat_transport_unsupported` host-tool gate instead of an unknown
+endpoint error, in both the Chat service and Lark routing.
+
+The Chat capabilities payload carries the same binding in its `manager` block
+(`channel_binding`): resolved executor endpoint, endpoint source, transport
+reason, resolved model, model source, and whether an operator credential is
+configured. It reports the credential variable name, never its value, so a
+frontend can show which executor and model the steward channel resolved and why.
 Legacy managed manager sessions retain their logical identity and bounded chat
 history but start a fresh executor thread in the same Codex home on first
 restore. This removes inherited project instructions without importing sessions

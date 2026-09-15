@@ -201,8 +201,16 @@ def manager_runtime_session_fields(profile: Mapping[str, Any]) -> dict[str, Any]
 def manager_runtime_capability_projection(
     runtime_controller: object,
     model_configuration: Mapping[str, Any],
+    *,
+    channel_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the manager section of the shared chat capabilities projection."""
+    """Build the manager section of the shared chat capabilities projection.
+
+    ``channel_binding`` is the resolved steward-channel executor and model
+    binding. The caller owns it; this projection only carries it into readback so
+    a frontend can show which executor and model the manager channel resolved
+    and why, without re-deriving the rule.
+    """
 
     resolver = getattr(runtime_controller, "manager_runtime_profile", None)
     runtime = (
@@ -210,4 +218,15 @@ def manager_runtime_capability_projection(
         if callable(resolver)
         else {**effective_manager_runtime_profile(None), "status": "ready"}
     )
-    return {"scope": "owner_global", **dict(model_configuration), "runtime": runtime}
+    projection: dict[str, Any] = {
+        "scope": "owner_global",
+        **dict(model_configuration),
+        "runtime": runtime,
+    }
+    if channel_binding is not None:
+        binding = dict(channel_binding)
+        binding["operator_credential_configured"] = bool(
+            str(binding.get("credential_env_var") or "").strip()
+        )
+        projection["channel_binding"] = binding
+    return projection

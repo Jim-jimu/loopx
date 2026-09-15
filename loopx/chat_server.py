@@ -32,7 +32,7 @@ from .chat_status_api import ChatStatusRequestMixin
 from .chat_runtime import ChatRuntimeController, TERMINAL_TURN_STATES
 from .chat_manager import (
     MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE, is_manager_channel,
-    manager_workspace, manager_model_config,
+    manager_channel_binding, manager_workspace, manager_model_config,
 )
 from .chat_ssh_source_api import SshSourceRequestMixin
 from .chat_store import ChatSessionStore
@@ -1269,7 +1269,9 @@ class ChatRequestHandler(
                 "ok": True,
                 "schema_version": "loopx_chat_capabilities_v1",
                 "manager": manager_runtime_capability_projection(
-                    self.server.runtime_controller, manager_model_config()
+                    self.server.runtime_controller,
+                    manager_model_config(),
+                    channel_binding=manager_channel_binding(),
                 ),
                 "runtime_identity": release_runtime_identity(),
                 "agent_backend": "multi_adapter",

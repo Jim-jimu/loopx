@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
-from .chat_manager import manager_model_config
+from .chat_manager import manager_channel_binding, manager_model_config
 from .chat_manager_details import read_manager_goal_details
 from .chat_manager_history import read_manager_delivery_history
 from .goal_portfolio import build_goal_portfolio
@@ -112,6 +112,7 @@ def manager_turn_context(
         "schema_version": "manager_turn_context_v1",
         "scope": "owner_global" if owner_scope else "external_goal_scope",
         "model_defaults": manager_model_config(),
+        "channel_binding": manager_channel_binding(),
         "snapshot_id": portfolio.get("snapshot_id"),
         "collected_at": portfolio.get("collected_at"),
         "collection_completed_at": portfolio.get("collection_completed_at"),

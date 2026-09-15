@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 from typing import Any
+
+from .control_plane.operator_credential import (
+    configured_operator_credential,
+    env_text,
+)
 
 MANAGER_AGENT_GOAL_ID = "loopx-manager"
 MANAGER_AGENT_OBJECTIVE = (
@@ -90,18 +94,112 @@ def is_manager_channel(value: Any) -> bool:
     return value == "manager" or str(value or "").startswith("manager.external.")
 
 
+# The steward channel binds its own executor and model to the operator
+# credential for the same reason the governed Turn surface does: a configured
+# operator credential must not silently fall back to one individual's CLI
+# login. The chat channel needs a transport that can hold an interactive
+# session, which is a separate fact from the credential, so the resolved
+# endpoint names its transport reason instead of hiding it.
+MANAGER_CHANNEL_BINDING_SCHEMA_VERSION = "manager_channel_binding_v0"
+MANAGER_ENDPOINT_WITH_OPERATOR_CREDENTIAL = "dsh"
+MANAGER_ENDPOINT_WITHOUT_OPERATOR_CREDENTIAL = "codex"
+# Endpoints that can serve the interactive steward channel today. dsh is a
+# bounded Turn host without a chat transport, so it is listed here only once
+# such a transport ships.
+MANAGER_CHAT_CAPABLE_ENDPOINTS = frozenset({MANAGER_ENDPOINT_WITHOUT_OPERATOR_CREDENTIAL})
+MANAGER_ENDPOINT_TRANSPORT_UNSUPPORTED = "dsh_chat_transport_unsupported"
+MANAGER_ENDPOINT_SOURCE_OPERATOR_CREDENTIAL = "operator_credential"
+MANAGER_ENDPOINT_SOURCE_NO_OPERATOR_CREDENTIAL = "no_operator_credential"
+
+MANAGER_MODEL_ENV_VAR = "LOOPX_MANAGER_MODEL"
+MANAGER_MODEL_WITH_OPERATOR_CREDENTIAL = "deepseek-flash"
+MANAGER_MODEL_WITHOUT_OPERATOR_CREDENTIAL = "gpt-6-astra"
+MANAGER_MODEL_SOURCE_ENV_OVERRIDE = "env_override"
+MANAGER_MODEL_SOURCE_OPERATOR_CREDENTIAL = "operator_credential_default"
+MANAGER_MODEL_SOURCE_VENDOR_DEFAULT = "vendor_default"
+MANAGER_REASONING_EFFORT_ENV_VAR = "LOOPX_MANAGER_REASONING_EFFORT"
+MANAGER_REASONING_EFFORT_DEFAULT = "high"
+MANAGER_REASONING_EFFORTS = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
+
+
+def manager_executor_endpoint_default(environ: dict[str, str] | None = None) -> str:
+    """Return the steward channel's default executor endpoint.
+
+    A configured operator credential selects the managed endpoint; the chat
+    channel still needs a transport that can hold the session, so an endpoint
+    without one resolves to the shipped chat transport and reports that reason
+    through :func:`manager_channel_binding`.
+    """
+
+    if configured_operator_credential(environ) is None:
+        return MANAGER_ENDPOINT_WITHOUT_OPERATOR_CREDENTIAL
+    if MANAGER_ENDPOINT_WITH_OPERATOR_CREDENTIAL in MANAGER_CHAT_CAPABLE_ENDPOINTS:
+        return MANAGER_ENDPOINT_WITH_OPERATOR_CREDENTIAL
+    return MANAGER_ENDPOINT_WITHOUT_OPERATOR_CREDENTIAL
+
+
+def manager_channel_binding(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """Project the steward channel's resolved executor, model, and their source."""
+
+    credential_env = configured_operator_credential(environ) or ""
+    endpoint = manager_executor_endpoint_default(environ)
+    if credential_env:
+        endpoint_source = MANAGER_ENDPOINT_SOURCE_OPERATOR_CREDENTIAL
+        transport_reason = (
+            ""
+            if endpoint == MANAGER_ENDPOINT_WITH_OPERATOR_CREDENTIAL
+            else MANAGER_ENDPOINT_TRANSPORT_UNSUPPORTED
+        )
+    else:
+        endpoint_source = MANAGER_ENDPOINT_SOURCE_NO_OPERATOR_CREDENTIAL
+        transport_reason = ""
+    model_override = env_text(MANAGER_MODEL_ENV_VAR, environ)
+    if model_override:
+        model = model_override
+        model_source = MANAGER_MODEL_SOURCE_ENV_OVERRIDE
+    elif credential_env:
+        model = MANAGER_MODEL_WITH_OPERATOR_CREDENTIAL
+        model_source = MANAGER_MODEL_SOURCE_OPERATOR_CREDENTIAL
+    else:
+        model = MANAGER_MODEL_WITHOUT_OPERATOR_CREDENTIAL
+        model_source = MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
+    return {
+        "schema_version": MANAGER_CHANNEL_BINDING_SCHEMA_VERSION,
+        "executor_endpoint": endpoint,
+        "executor_endpoint_source": endpoint_source,
+        "executor_transport_reason": transport_reason,
+        "model": model,
+        "model_source": model_source,
+        "credential_env_var": credential_env,
+    }
+
+
 def open_manager_session(
     *,
     controller: Any,
     goal_id: str,
     work_dir: Path,
-    executor_endpoint_id: str = "codex",
+    executor_endpoint_id: str | None = None,
     provider: str = "",
     audience: str = "",
 ) -> tuple[dict[str, Any], bool]:
+    resolved_endpoint = (
+        str(executor_endpoint_id).strip()
+        if executor_endpoint_id
+        else manager_executor_endpoint_default()
+    )
     return controller.open_session(
         goal_id=goal_id,
-        agent_id=executor_endpoint_id,
+        agent_id=resolved_endpoint,
         work_dir=work_dir,
         objective=MANAGER_AGENT_OBJECTIVE,
         mode="resume_latest",
@@ -117,23 +215,19 @@ def manager_skill_text() -> str:
     return (Path(__file__).parent / "capabilities/manager_context/skills/loopx-manager/SKILL.md").read_text(encoding="utf-8")
 
 
-def manager_model_config() -> dict[str, str]:
-    model = (
-        os.environ.get("LOOPX_MANAGER_MODEL", "gpt-6-astra").strip() or "gpt-6-astra"
-    )
+def manager_model_config(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """Return the manager host arguments: default model then explicit override.
+
+    The default model follows the operator credential, so a configured
+    credential does not silently run the steward on the vendor default model.
+    """
+
+    model = manager_channel_binding(environ)["model"]
     effort = (
-        os.environ.get("LOOPX_MANAGER_REASONING_EFFORT", "high").strip() or "high"
+        env_text(MANAGER_REASONING_EFFORT_ENV_VAR, environ)
+        or MANAGER_REASONING_EFFORT_DEFAULT
     )
-    if effort not in {
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max",
-        "ultra",
-    }:
+    if effort not in MANAGER_REASONING_EFFORTS:
         raise ValueError("invalid manager reasoning effort")
     return {"model": model, "reasoning_effort": effort}
 

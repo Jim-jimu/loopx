@@ -39,6 +39,15 @@ from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
 
 
 EventSink = Callable[[str, dict[str, Any]], None]
+
+# The managed Turn host runs one bounded work segment per request and has no
+# interactive Chat transport. Naming that here keeps a session request for it a
+# typed gate instead of the untyped "unknown Agent endpoint" fallback, so the
+# steward channel never half-connects to a host it cannot hold.
+MANAGED_HOST_WITHOUT_CHAT_TRANSPORT = "dsh"
+MANAGED_HOST_CHAT_TRANSPORT_UNSUPPORTED = "managed_host_chat_transport_unsupported"
+
+
 class ChatRuntimeAdapter(Protocol):
     @property
     def upstream_thread_id(self) -> str: ...
@@ -524,6 +533,25 @@ class ChatRuntimeController:
                 if latest is not None and latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                     return latest, True
             if capability is None:
+                if agent_id == MANAGED_HOST_WITHOUT_CHAT_TRANSPORT:
+                    raise CodexChatAgentError(
+                        (
+                            f"The managed host '{agent_id}' runs bounded LoopX Turns "
+                            "and cannot hold an interactive Chat session yet."
+                        ),
+                        error_code=MANAGED_HOST_CHAT_TRANSPORT_UNSUPPORTED,
+                        gate={
+                            "kind": "host_tool_gate",
+                            "summary": (
+                                f"'{agent_id}' has no LoopX Chat transport; it is a "
+                                "bounded Turn host."
+                            ),
+                            "next_action": (
+                                "Select a chat-capable Agent endpoint for this session, "
+                                "or run the managed host through `loopx turn`."
+                            ),
+                        },
+                    )
                 raise ValueError(f"unknown Agent endpoint: {agent_id}")
             if not capability["available"]:
                 raise ValueError(f"Agent endpoint is unavailable: {agent_id}")

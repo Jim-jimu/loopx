@@ -46,22 +46,19 @@ def _apply_manager_runtime_profile(runtime_root, profile):
     )
 
 
-def test_manager_defaults_are_independent_of_worker_configuration(monkeypatch):
-    monkeypatch.delenv("LOOPX_MANAGER_MODEL", raising=False)
-    monkeypatch.delenv("LOOPX_MANAGER_REASONING_EFFORT", raising=False)
-    assert manager_model_config() == {
+def test_manager_defaults_are_independent_of_worker_configuration():
+    assert manager_model_config({}) == {
         "model": "gpt-6-astra",
         "reasoning_effort": "high",
     }
-    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "fixture-model")
-    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "low")
-    assert manager_model_config() == {
+    assert manager_model_config(
+        {"LOOPX_MANAGER_MODEL": "fixture-model", "LOOPX_MANAGER_REASONING_EFFORT": "low"}
+    ) == {
         "model": "fixture-model",
         "reasoning_effort": "low",
     }
-    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "typo")
     with pytest.raises(ValueError):
-        manager_model_config()
+        manager_model_config({"LOOPX_MANAGER_REASONING_EFFORT": "typo"})
 
 
 def test_context_scopes_before_read_and_missing_registry_is_unknown(

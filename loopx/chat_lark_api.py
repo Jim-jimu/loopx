@@ -30,7 +30,12 @@ from .extensions.lark.presentation.kanban import (
     CommandRunner,
     default_subprocess_runner,
 )
-from .chat_manager import manager_channel, open_manager_session
+from .chat_agent import CodexChatAgentError
+from .chat_manager import (
+    manager_channel,
+    manager_executor_endpoint_default,
+    open_manager_session,
+)
 from .extensions.lark.goal_channel_contracts import binding_for_goal, goal_from_registry
 from .extensions.lark.goal_channel_targets import goal_channel_target_for_name
 from .history import load_registry
@@ -480,8 +485,9 @@ class LarkChatRequestMixin:
             executor_endpoint_id = (
                 _compact_text(body.get("executor_endpoint_id"), limit=100)
                 or stored_routing.get("executor_endpoint_id")
-                or "codex"
             )
+            if conversation_kind == "manager" and not executor_endpoint_id:
+                executor_endpoint_id = manager_executor_endpoint_default()
             session_id: str | None = None
             session_ids_by_agent: dict[str, str] = {}
             if conversation_kind == "manager":
@@ -591,6 +597,11 @@ class LarkChatRequestMixin:
                     else None,
                     session_id=session_id,
                 )
+        except CodexChatAgentError as exc:
+            self._send_error(
+                str(exc), status=400, gate=exc.gate, error_code=exc.error_code
+            )
+            return
         except ValueError as exc:
             self._send_error(str(exc), status=400, error_code="invalid_lark_connection")
             return

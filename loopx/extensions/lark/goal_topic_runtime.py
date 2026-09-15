@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ...chat_manager import MANAGER_AGENT_OBJECTIVE
+from ...chat_manager import MANAGER_AGENT_OBJECTIVE, manager_executor_endpoint_default
 from .manager_routing import (
     has_manager_binding,
     invalid_manager_authority_result,
@@ -793,7 +793,7 @@ def answer_lark_goal_topic(
     session_id = str(route.get("session_id") or "")
     manager = route.get("conversation_kind") == "manager"
     agent_id = (
-        str(route.get("executor_endpoint_id") or "codex")
+        str(route.get("executor_endpoint_id") or manager_executor_endpoint_default())
         if manager
         else str(route.get("agent_id") or "codex")
     )

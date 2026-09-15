@@ -109,6 +109,16 @@ export const chatCapabilitiesSchema = z.object({
     scope: z.literal("owner_global"),
     model: z.string(),
     reasoning_effort: z.string(),
+    channel_binding: z.object({
+      schema_version: z.string(),
+      executor_endpoint: z.string(),
+      executor_endpoint_source: z.string(),
+      executor_transport_reason: z.string(),
+      model: z.string(),
+      model_source: z.string(),
+      credential_env_var: z.string(),
+      operator_credential_configured: z.boolean(),
+    }).optional(),
     runtime: z.object({
       schema_version: z.literal("manager_runtime_effective_profile_v0"),
       runtime_profile: z.enum(["restricted", "trusted_owner"]),

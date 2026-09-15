@@ -27,14 +27,14 @@ import os
 from collections.abc import Mapping
 from typing import Any, Callable
 
+from ..operator_credential import (
+    OPERATOR_CREDENTIAL_ENV_VARS,
+    OPERATOR_ENDPOINT_ENV_VAR,
+    configured_operator_credential,
+)
+
 HOST_WITH_OPERATOR_CREDENTIAL = "dsh"
 HOST_WITHOUT_OPERATOR_CREDENTIAL = "codex-cli"
-
-# Credentials the DSH Turn host already reads for its provider. Presence is the
-# whole signal: the binding never invents a credential or falls back to a
-# personal subscription when one is configured.
-OPERATOR_CREDENTIAL_ENV_VARS = ("DEEPSEEK_API_KEY",)
-OPERATOR_ENDPOINT_ENV_VAR = "DEEPSEEK_BASE_URL"
 
 MANAGED_EXECUTOR_BINDING_SCHEMA_VERSION = "managed_executor_binding_v0"
 # Executor kinds name where a Turn's model work is billed and bounded rather
@@ -52,18 +52,6 @@ MANAGED_HOST = HOST_WITH_OPERATOR_CREDENTIAL
 # launchability fact this projection checks without side effects.
 DSH_RUNTIME_MODULE = "deepseek_harness"
 DSH_RUNTIME_UNAVAILABLE = "dsh_runtime_unavailable"
-
-
-def configured_operator_credential(
-    environ: Mapping[str, str] | None = None,
-) -> str | None:
-    """Return the configured operator credential env var name, else ``None``."""
-
-    source = os.environ if environ is None else environ
-    for name in OPERATOR_CREDENTIAL_ENV_VARS:
-        if str(source.get(name, "") or "").strip():
-            return name
-    return None
 
 
 def resolve_default_turn_host(environ: Mapping[str, str] | None = None) -> str:

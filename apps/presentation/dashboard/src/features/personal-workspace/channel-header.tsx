@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Bot, ChevronDown, Eye, Info, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
 
 import { localizedGoalState, useWorkspaceI18n } from "./i18n";
-import type { ManagerRuntimeSessionReadback } from "../../data/chat";
+import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
 import { goalUsageLabel } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
 
 export function ChannelHeader({
   agents,
+  managerChannelBinding,
   managerChatOpen,
   managerRuntime,
   mobileNavigationOpen,
@@ -27,6 +28,7 @@ export function ChannelHeader({
   selectedGoalTab,
 }: {
   agents: WorkspaceAgentOption[];
+  managerChannelBinding?: ManagerChannelBinding | null;
   managerChatOpen?: boolean;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   mobileNavigationOpen?: boolean;
@@ -84,6 +86,13 @@ export function ChannelHeader({
       tokens: t("drawer.tokensShort"),
     })
     : null;
+  const managerExecutionSourceLabel = managerChannelBinding
+    ? managerChannelBinding.model_source === "env_override"
+      ? t("header.managerModelSourceEnvOverride")
+      : managerChannelBinding.model_source === "operator_credential_default"
+        ? t("header.managerModelSourceOperatorCredential")
+        : t("header.managerModelSourceVendorDefault")
+    : null;
 
   return (
     <header className="personal-channel-header">
@@ -100,6 +109,20 @@ export function ChannelHeader({
               profile: managerRuntime.runtime_profile,
               sandbox: managerRuntime.sandbox,
             })}</p>
+        ) : null}
+        {!selectedGoal && managerChannelBinding ? (
+          <p className="personal-manager-execution">
+            <span className="personal-execution-chip">
+              <span className="personal-execution-chip-endpoint">{managerChannelBinding.executor_endpoint}</span>
+              <span className="personal-execution-chip-model">{managerChannelBinding.model}</span>
+              {managerExecutionSourceLabel ? <small>{managerExecutionSourceLabel}</small> : null}
+            </span>
+            {managerChannelBinding.executor_transport_reason ? (
+              <span className="personal-execution-note">
+                {t("header.managerTransportFallback", { executor: managerChannelBinding.executor_endpoint })}
+              </span>
+            ) : null}
+          </p>
         ) : null}
         {selectedGoal ? <p>{selectedGoal.loadState ? t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : `${selectedGoal.agentLaneCount && selectedGoal.agentLaneCount > 1
             ? t("header.workAgentCount", { count: selectedGoal.agentLaneCount })

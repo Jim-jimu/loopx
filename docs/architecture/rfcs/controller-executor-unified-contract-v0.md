@@ -881,6 +881,15 @@ are stable design references, not claims that a canonical Todo is complete.
 | **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, Stop and artifact return | Packaged managed and supported attached heartbeat journeys, including unavailable host and late results; installed qualification separate; no new packet-format toggle |
 | **C9 — Retire old paths and qualify adoption; C1–C8** | Contract/runtime maintainers: remove superseded producers, format switches, duplicated prompts and tests; update protocols, guides and RFC delivery facts | Caller/field/decoder retirement inventory, historical replay and rollback evidence; App + benchmark acceptance and matched benefit before any default promotion |
 
+The existing native context entry now supports a bounded C2 precursor: complete
+captures remain on disk, the normal response exposes file navigation, and exact
+file deltas do not require model retention. After compaction the next work Turn
+establishes a new full saved baseline, without an immediate full reread.
+Required facts still precede dependent decisions; admission and settlement are
+unchanged. This does not qualify C1's unified producer/consumer cutover or the
+matched effectiveness/full-cost result in §9. Rollback uses the existing
+context-delivery off path; staged material composition remains separately owned.
+
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
 C7 can prepare measurements before C6 but cannot claim two-session outcomes.

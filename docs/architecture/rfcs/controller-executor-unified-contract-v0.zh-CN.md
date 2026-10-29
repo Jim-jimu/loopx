@@ -663,6 +663,13 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 | **C8 — 产品配置与运行 readback；C3/C6** | 既有 App/settings/Chat 投影：同一 effective configuration owner，按角色展示 activity、失败/恢复、Stop 和产物返回 | 打包 managed 及受支持 attached heartbeat 流程，包括 host 不可用和结果迟到；安装资格另验；不新增 packet 格式开关 |
 | **C9 — 旧路径退役与采用资格；C1–C8** | Contract/runtime 维护者：删除被替代 producer、格式开关、重复提示/测试，更新 protocol、guide 和 RFC 交付事实 | 调用方/字段/decoder 退役清单、历史 replay 与回退证据；App + benchmark 验收及可比收益成立后再决定默认提升 |
 
+现有原生上下文入口增加一个有界 C2 前置改进：完整捕获保存在磁盘，常规响应提供
+文件导航，精确文件差分不依赖模型保留；压缩后下一个新 Turn 建立新的完整文件基线，不要求立即
+全量重读。必要事实仍须在
+依赖性决策前理解；准入、结算不变。这不代表 C1 统一 producer/consumer 切换或
+第 9 节可比效果/完整成本验收完成。沿既有 context-delivery off 路径回滚；材料分阶段
+组合仍由原 owner 独立收敛。
+
 C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余
 缺口、实际测试与回退。完整语言迁移或无关 manager 重写不是前置条件；新抽象能编译

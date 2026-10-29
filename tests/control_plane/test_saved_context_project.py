@@ -115,10 +115,9 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
     assert code == 0 and result["ok"] and result["mode"] == "full", result
     assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
     if enabled:
-        assert result["schema_version"] == "context_capture_page_v1"
-        assert result["offset"] == 0 and result["eof"]
-        assert result["content"].encode() == Path(result["path"]).read_bytes()
-        assert json.loads(result["content"]) == original
+        assert "content" not in result and "offset" not in result
+        assert "index_command" in result and "select_command" in result
+        assert json.loads(Path(result["path"]).read_bytes()) == original
         actual_root = context if cache_location == "default" else root
         assert actual_root.stat().st_mode & 0o077 == 0
         assert list(actual_root.glob("context-*"))
@@ -145,7 +144,7 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
 
 @pytest.mark.parametrize("body", ["Exact requirement.\n" * 7000, "完整要求与来源🙂\n" * 7000], ids=["ascii", "utf8"])
 @pytest.mark.parametrize("deep_path", [False, True], ids=["short", "deep"])
-def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp_path, monkeypatch, body, deep_path):
+def test_saved_projection_reference_allows_optional_exact_read_and_restart(tmp_path, monkeypatch, body, deep_path):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
     from loopx.control_plane.turn_driver.codex_input_trace import _capture_page_range
 
@@ -168,28 +167,30 @@ def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp
         "--capture-sha256", digest, "--goal-id", "goal", "--agent-id", "agent", "--turn-instance-id", "turn",
         "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(context), cwd=tmp_path)
     assert code == 0 and result["mode"] == "full", result
-    # Include the final recovery, activation and instruction fields: an inline
-    # content cap alone does not bound the actual native guard stdout.
-    assert not result["eof"] and len(result["content"].encode()) > 32000
-    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 64000
+    # The default is a reference regardless of file length. An intentional full
+    # read remains lossless and paginated, without changing the saved decision.
+    assert "content" not in result and "offset" not in result
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 8192
     delivered = Path(result["path"]).read_bytes()
     delivered_digest = hashlib.sha256(delivered).hexdigest()
     assert result["sha256"] == delivered_digest and json.loads(delivered) == json.loads(raw)
-    assert _capture_page_range(result, raw=delivered, digest=delivered_digest) == (0, result["next_offset"])
-    assert _capture_page_range({**result, "content": result["content"][:-1]}, raw=delivered, digest=delivered_digest) is None
-    combined = result["content"].encode()
-    page = result
-    while not page["eof"]:
-        argv = shlex.split(page["next_command"])
+    combined = b""
+    command = result["command"]
+    while True:
+        argv = shlex.split(command)
         code, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
         assert code == 0 and page["offset"] == len(combined)
+        assert _capture_page_range(page, raw=delivered, digest=delivered_digest) == (len(combined), len(combined) + len(page["content"].encode()))
+        assert _capture_page_range({**page, "content": page["content"][:-1]}, raw=delivered, digest=delivered_digest) is None
         assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 64000
         combined += page["content"].encode()
+        if page["eof"]:
+            break
+        command = page["next_command"]
     assert combined == delivered and hashlib.sha256(combined).hexdigest() == delivered_digest
     argv = shlex.split(result["command"])
     code, restarted = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
     assert code == 0 and restarted["offset"] == 0
-    assert restarted["content"].startswith(result["content"])
     assert restarted["content"].encode() == delivered[:restarted["next_offset"]]
     assert source.read_bytes() == raw and not registry.exists() and not runtime.exists()
 
@@ -429,7 +430,9 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 
     def consume(wire):
         data = bytearray()
-        page = wire
+        argv = shlex.split(wire["command"])
+        rc, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=project)
+        assert rc == 0, page
         while True:
             assert page["ok"] and page["offset"] == len(data)
             data.extend(page["content"].encode())
@@ -476,7 +479,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
-@pytest.mark.parametrize("host", ["app_server", "benchmark", "app_machine", "app_code_mode"])
+@pytest.mark.parametrize("host", ["app_server", "benchmark", "app_machine", "app_code_mode", "app_progressive"])
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -576,6 +579,12 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     queue.append(shlex.join([*cli, "--format", "json", "quota", "context-read",
                         "--capture-file", descriptor["path"], "--capture-sha256", descriptor["sha256"],
                         "--offset", str(offset)]))
+                if host == "app_progressive":
+                    # Exercise the actual small reference and selective public
+                    # reader in native model input; never consume either file in full.
+                    assert "content" not in descriptor
+                    queue = [descriptor["index_command"], descriptor["recovery"]["command"]
+                        + " --select /goal_id --select /heartbeat_receipt"]
                 phase = name + "_read"
                 if not queue:
                     return response(request, number, message)
@@ -583,7 +592,19 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             else:
                 name = phase.removesuffix("_read")
                 descriptor = observed[name][1]
-                assert _delivered(request, descriptor["sha256"]) == Path(descriptor["path"]).read_text().rstrip("\n")
+                if host == "app_progressive":
+                    outputs = [item["output"] for item in request["input"]
+                        if item.get("type") in ("function_call_output", "custom_tool_call_output")]
+                    output = outputs[-1]
+                    if isinstance(output, list):
+                        output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
+                    page = json.loads(output.split("\nOutput:\n", 1)[-1])
+                    values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
+                    assert values["/goal_id"] == GOAL_ID
+                    assert values["/heartbeat_receipt"]["turn_instance_id"] == "saved-native-turn"
+                    assert "candidate" not in json.loads((context / "session.json").read_bytes())
+                else:
+                    assert _delivered(request, descriptor["sha256"]) == Path(descriptor["path"]).read_text().rstrip("\n")
                 if host == "benchmark" and name in ("cold", "warm"):
                     # Consume the command actually delivered to the native
                     # worker, rather than manually supplying missing flags.
@@ -686,7 +707,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             assert restored["mode"] == "delta"  # A fallback would hide a broken baseline chain.
         # Match the native journal's exact prior full capture and depth. The
         # reconstructed mapping need not preserve that capture's field order.
-        baseline = {**current, "ancestry": wire["ancestry"]}
+        baseline = {**current, "ancestry": 0 if wire.get("continuity_basis") == "captured_file" else wire["ancestry"]}
     if host == "benchmark":
         for name, (_, raw) in zip(("cold", "warm"), sources):
             presentation = json.loads(Path(observed[name][0]["recovery"]["path"]).read_text())
@@ -694,11 +715,28 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             selected = presentation["interaction_contract"]["cli_channel"]["selection_command"]
             original_command = original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
             words = shlex.split(selected["command_args_template"])
+            original_words = shlex.split(original_command)
             for option in ("--context-delivery", "--codex-context-dir", "--max-page-output-bytes"):
-                index = words.index(option)
-                del words[index:index + 2]
-            assert words == shlex.split(original_command)
+                for command_words in (words, original_words):
+                    if option in command_words:
+                        index = command_words.index(option)
+                        del command_words[index:index + 2]
+            assert words == original_words
             selected["command_args_template"] = original_command
+            # Main already deduplicates identical Todo rows within this exact
+            # capture. Resolve only that registered presentation carrier.
+            for rows in presentation["agent_todo_summary"].values():
+                if not isinstance(rows, list):
+                    continue
+                for i, row in enumerate(rows):
+                    if not isinstance(row, dict) or "context_ref" not in row:
+                        continue
+                    value = presentation
+                    for part in row["context_ref"].split("/")[1:]:
+                        value = value[int(part)] if isinstance(value, list) else value[part]
+                    assert "context_ref" not in value
+                    rows[i] = value
+            presentation.pop("context_reference_instruction", None)
             assert presentation == original  # only presentation transport differs
     else:
         assert cold["context"] == json.loads(sources[0][1]) and projected == json.loads(sources[1][1])
